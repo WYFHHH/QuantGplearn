@@ -685,7 +685,7 @@ class BaseSymbolic(BaseEstimator, metaclass=ABCMeta):
 
             # Ensure joblib uses loky backend and limits memory mapping files
             # with parallel_backend('loky', inner_max_num_threads=2):  # Optionally limit the threads per process
-            population = Parallel(n_jobs=n_jobs, verbose=int(self.verbose > 1))(
+            population = Parallel(n_jobs=n_jobs, temp_folder=None, verbose=int(self.verbose > 1))(
                 delayed(_parallel_evolve)(
                     max_length,
                     n_programs[i],
