@@ -177,5 +177,6 @@ cython_debug/
 
 # QuantGplearn generated data and research artifacts
 data/cache/
+data/binance_um_perp_1h_panel.h*
 backtest_results/cross_section/
 example/details/cross_section/

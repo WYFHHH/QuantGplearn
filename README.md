@@ -82,6 +82,18 @@ python example/cross_section_gp.py
 Generated local artifacts are written under `backtest_results/cross_section/`
 and are ignored by Git.
 
+For a quick smoke test on an existing panel cache:
+
+```bash
+python example/cross_section_gp.py \
+  --data data/binance_um_perp_1h_panel.h \
+  --population-size 4 \
+  --generations 1 \
+  --components 1 \
+  --max-length 8 \
+  --output-dir backtest_results/cross_section/smoke_gp
+```
+
 If Binance returns HTTP 451 in your region, run from an eligible network or set
 standard proxy environment variables before downloading:
 
@@ -145,7 +157,7 @@ The default integer windows are configured for hourly bars:
 The Binance downloader stores a local HDF5 panel cache:
 
 ```text
-data/cache/binance_um_perp_1h_panel.h5
+data/binance_um_perp_1h_panel.h
 ```
 
 The table uses a MultiIndex:

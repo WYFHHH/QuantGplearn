@@ -79,9 +79,9 @@ def score_cross_section_factor(y, y_pred, sample_weight, panel_data):
 def parse_args():
     parser = argparse.ArgumentParser(description="Mine a market-neutral cross-section strategy with GP.")
     parser.add_argument("--data", default=str(DEFAULT_CACHE_PATH))
-    parser.add_argument("--population-size", type=int, default=20)
-    parser.add_argument("--generations", type=int, default=3)
-    parser.add_argument("--components", type=int, default=3)
+    parser.add_argument("--population-size", type=int, default=8)
+    parser.add_argument("--generations", type=int, default=2)
+    parser.add_argument("--components", type=int, default=2)
     parser.add_argument("--max-length", type=int, default=20)
     parser.add_argument("--output-dir", default="backtest_results/cross_section")
     return parser.parse_args()

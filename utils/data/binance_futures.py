@@ -34,7 +34,7 @@ KLINE_COLUMNS = [
     "taker_buy_quote_volume",
     "ignore",
 ]
-DEFAULT_CACHE_PATH = Path("data/cache/binance_um_perp_1h_panel.h5")
+DEFAULT_CACHE_PATH = Path("data/binance_um_perp_1h_panel.h")
 
 
 class BinanceAccessError(RuntimeError):
