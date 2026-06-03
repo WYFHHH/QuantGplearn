@@ -174,3 +174,8 @@ cython_debug/
 .docx
 .doc
 .pdf
+
+# QuantGplearn generated data and research artifacts
+data/cache/
+backtest_results/cross_section/
+example/details/cross_section/

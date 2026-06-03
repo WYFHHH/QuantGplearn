@@ -12,7 +12,7 @@ from sklearn.base import BaseEstimator
 from sklearn.base import RegressorMixin, TransformerMixin, ClassifierMixin
 from sklearn.exceptions import NotFittedError
 from sklearn.utils import compute_sample_weight
-from sklearn.utils.validation import check_array, _check_sample_weight
+from sklearn.utils.validation import check_array, check_X_y, _check_sample_weight
 from sklearn.utils.multiclass import check_classification_targets
 from sklearn.preprocessing import LabelEncoder
 import datetime
@@ -272,6 +272,42 @@ class BaseSymbolic(BaseEstimator, metaclass=ABCMeta):
         self.last_generation_mean_fitness = -100.
         self.last_fitness_list = []
 
+    def _prepare_panel_execution_input(self, X):
+        if self.data_type != 'panel':
+            return check_array(X)
+        if not isinstance(X, pd.DataFrame):
+            raise ValueError('panel transform/predict input must be a pandas DataFrame')
+        if self.feature_names is None:
+            raise ValueError('feature_names is required for panel data')
+
+        X_panel = X.copy()
+        index_names = list(X_panel.index.names) if isinstance(X_panel.index, pd.MultiIndex) else [X_panel.index.name]
+        if self.time_series_index in X_panel.columns and self.security_index in X_panel.columns:
+            X_panel = X_panel.set_index([self.time_series_index, self.security_index])
+        elif self.time_series_index not in index_names or self.security_index not in index_names:
+            raise ValueError('panel input must include time_series_index and security_index in columns or index')
+
+        X_panel = X_panel.sort_index()
+        X_features = X_panel.loc[:, self.feature_names]
+        X_arr = check_array(X_features, ensure_all_finite='allow-nan')
+        if self.n_features_in_ != X_arr.shape[1]:
+            raise ValueError('Number of features of the model must match the '
+                             'input. Model n_features is %s and input '
+                             'n_features is %s.'
+                             % (self.n_features_in_, X_arr.shape[1]))
+        security_codes = pd.Categorical(
+            X_panel.index.get_level_values(self.security_index)
+        ).codes.astype(float)
+        time_codes = pd.Categorical(
+            X_panel.index.get_level_values(self.time_series_index)
+        ).codes.astype(float)
+        return np.column_stack([
+            np.zeros(X_arr.shape[0], dtype=float),
+            X_arr,
+            security_codes,
+            time_codes,
+        ])
+
     # 打印训练日志
     def _verbose_reporter(self, run_details=None):
         """A report of the progress of the evolution process.
@@ -356,6 +392,8 @@ class BaseSymbolic(BaseEstimator, metaclass=ABCMeta):
         # 检查时间index和个股index， 对于截面，时序和面板数据分别检查
         security_data = None
         time_series_data = None
+        panel_security_codes = None
+        panel_time_codes = None
         if self.data_type == 'section':
             if self.time_series_index is not None:
                 raise ValueError('For Section Data, time_series_index should be None')
@@ -403,20 +441,25 @@ class BaseSymbolic(BaseEstimator, metaclass=ABCMeta):
                 raise ValueError('For panel Data, security_index should NOT be None')
 
             # security time_series 进入index
-            if self.time_series_index not in X.columns and \
-                    (X.index.name is None or self.time_series_index not in X.index.name):
+            index_names = list(X.index.names) if isinstance(X.index, pd.MultiIndex) else [X.index.name]
+            has_time_col = self.time_series_index in X.columns
+            has_security_col = self.security_index in X.columns
+            has_time_index = self.time_series_index in index_names
+            has_security_index = self.security_index in index_names
+            if not has_time_col and not has_time_index:
                 raise ValueError('Can not fund time_series_index {} in both columns and index'
                                  .format(self.time_series_index))
-            elif self.security_index not in X.columns and \
-                    (X.index.name is None or self.security_index not in X.index.name):
+            if not has_security_col and not has_security_index:
                 raise ValueError('Can not fund security_index {} in both columns and index'
                                  .format(self.security_index))
-            elif self.time_series_index in X.columns and self.security_index in X.columns:
+            if has_time_col and has_security_col:
                 X.set_index([self.time_series_index, self.security_index], inplace=True)
-            elif self.time_series_index in X.columns:
-                X.set_index(self.security_index, inplace=True, append=True)
-            elif self.security_index in X.columns:
+            elif has_time_col:
                 X.set_index(self.time_series_index, inplace=True, append=True)
+            elif has_security_col:
+                X.set_index(self.security_index, inplace=True, append=True)
+            if isinstance(X.index, pd.MultiIndex):
+                X = X.reorder_levels([self.time_series_index, self.security_index])
 
             # 判断没有重复
             if len(X.index) != len(X.index.drop_duplicates()):
@@ -428,6 +471,8 @@ class BaseSymbolic(BaseEstimator, metaclass=ABCMeta):
             X, y = X_combine.loc[:, self.feature_names], X_combine.loc[:, '_label']
             time_series_data = X.index.get_level_values(self.time_series_index).values
             security_data = X.index.get_level_values(self.security_index).values
+            panel_security_codes = pd.Categorical(security_data).codes.astype(float)
+            panel_time_codes = pd.Categorical(time_series_data).codes.astype(float)
 
         # 检查category_features是否与全包含在feature_names中
         # 当存在分类数据时，输入数据类型必须为pd。DataFrame
@@ -454,7 +499,8 @@ class BaseSymbolic(BaseEstimator, metaclass=ABCMeta):
         # 检查数据内容
         if isinstance(self, ClassifierMixin):
             # 验证y是否为分类数据， X， y强转ndarray
-            X, y = self._validate_data(X, y, y_numeric=False)
+            X, y = check_X_y(X, y, y_numeric=False, ensure_all_finite='allow-nan')
+            self.n_features_in_ = X.shape[1]
             check_classification_targets(y)
 
             if self.class_weight:
@@ -475,7 +521,8 @@ class BaseSymbolic(BaseEstimator, metaclass=ABCMeta):
 
         else:
             # 验证y是否为数值数据， X， y强转ndarray
-            X, y = self._validate_data(X, y, y_numeric=True)
+            X, y = check_X_y(X, y, y_numeric=True, ensure_all_finite='allow-nan')
+            self.n_features_in_ = X.shape[1]
 
         # check hall_of_fame and n_components, if have
         hall_of_fame = self.hall_of_fame
@@ -504,6 +551,14 @@ class BaseSymbolic(BaseEstimator, metaclass=ABCMeta):
                 if not isinstance(feature_name, str):
                     raise ValueError('invalid type %s found in '
                                      '`feature_names`.' % type(feature_name))
+
+        if self.data_type == 'panel':
+            X = np.column_stack([
+                np.zeros(X.shape[0], dtype=float),
+                X,
+                panel_security_codes,
+                panel_time_codes,
+            ])
 
         # 检查const_range
         if not ((isinstance(self.const_range, tuple) and
@@ -935,13 +990,14 @@ class SymbolicRegressor(BaseSymbolic, RegressorMixin):
         if not hasattr(self, '_program'):
             raise NotFittedError('SymbolicRegressor not fitted.')
 
-        X = check_array(X)
+        X = self._prepare_panel_execution_input(X)
         _, n_features = X.shape
-        if self.n_features_in_ != n_features:
+        feature_count = n_features - 3 if self.data_type == 'panel' else n_features
+        if self.n_features_in_ != feature_count:
             raise ValueError('Number of features of the model must match the '
                              'input. Model n_features is %s and input '
                              'n_features is %s.'
-                             % (self.n_features_in_, n_features))
+                             % (self.n_features_in_, feature_count))
 
         y = self._program.execute(X)
 
@@ -1023,13 +1079,14 @@ class SymbolicClassifier(BaseSymbolic, ClassifierMixin):
         if not hasattr(self, '_program'):
             raise NotFittedError('SymbolicClassifier not fitted.')
 
-        X = check_array(X)
+        X = self._prepare_panel_execution_input(X)
         _, n_features = X.shape
-        if self.n_features_in_ != n_features:
+        feature_count = n_features - 3 if self.data_type == 'panel' else n_features
+        if self.n_features_in_ != feature_count:
             raise ValueError('Number of features of the model must match the '
                              'input. Model n_features is %s and input '
                              'n_features is %s.'
-                             % (self.n_features_in_, n_features))
+                             % (self.n_features_in_, feature_count))
 
         scores = self._program.execute(X)
         proba = self._transformer(scores)
@@ -1153,13 +1210,14 @@ class SymbolicTransformer(BaseSymbolic, TransformerMixin):
         if not hasattr(self, '_best_programs'):
             raise NotFittedError('SymbolicTransformer not fitted.')
 
-        X = check_array(X)
+        X = self._prepare_panel_execution_input(X)
         _, n_features = X.shape
-        if self.n_features_in_ != n_features:
+        feature_count = n_features - 3 if self.data_type == 'panel' else n_features
+        if self.n_features_in_ != feature_count:
             raise ValueError('Number of features of the model must match the '
                              'input. Model n_features is %s and input '
                              'n_features is %s.'
-                             % (self.n_features_in_, n_features))
+                             % (self.n_features_in_, feature_count))
 
         def execute_gp(gp, X):
             return gp.execute(X)
@@ -1171,7 +1229,6 @@ class SymbolicTransformer(BaseSymbolic, TransformerMixin):
         X_new = np.array(result).T
         return X_new
 
-    def fit_transform(self, X, y, sample_weight=None):
+    def fit_transform(self, X, y, max_length=20, sample_weight=None):
         # 训练之后转换
-        return self.fit(X, y, sample_weight).transform(X)
-
+        return self.fit(X, y, max_length=max_length, sample_weight=sample_weight).transform(X)

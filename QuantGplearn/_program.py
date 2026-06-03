@@ -81,6 +81,15 @@ class _Program(object):
         self._max_samples = None
         self._indices_state = None
 
+    def _feature_label(self, node):
+        idx = int(node)
+        if self.feature_names is None:
+            return 'X%s' % idx
+        pos = idx - 1 if len(self.feature_names) == self.n_features and idx > 0 else idx
+        if pos < 0 or pos >= len(self.feature_names):
+            return 'X%s' % idx
+        return self.feature_names[pos]
+
     def generate_my_output(self):
         """Generates the LISP tree output and stores it in self.output."""
         terminals = [0]
@@ -91,10 +100,7 @@ class _Program(object):
                 my_output += node.name + '('
             else:
                 if isinstance(node, str):
-                    if self.feature_names is None:
-                        my_output += 'X%s' % node
-                    else:
-                        my_output += self.feature_names[int(node)]
+                    my_output += self._feature_label(node)
                 elif isinstance(node, int):
                     my_output += '%d' % node
                 elif isinstance(node, float):
@@ -215,11 +221,12 @@ class _Program(object):
                     #     _choice = random_state.randint(*terminal_stack[-1][0]['scalar']['int'])
                     #     _choice = random_state.randint(*terminal_stack[-1][0]['scalar']['int'])
                     elif 'int' in terminal_stack[-1][0]['scalar']:
-                        # if isinstance(terminal_stack[-1][0]['scalar']['int'], tuple):
-                        #     _choice = random_state.randint(*terminal_stack[-1][0]['scalar']['int'])
-                        # if isinstance(terminal_stack[-1][0]['scalar']['int'], list):
-                        # print(random_state)
-                        _choice = random_state.choice(terminal_stack[-1][0]['scalar']['int'])
+                        spec = terminal_stack[-1][0]['scalar']['int']
+                        if isinstance(spec, list):
+                            _choice = random_state.choice(spec)
+                        else:
+                            left, right = spec
+                            _choice = random_state.randint(int(left), int(right) + 1)
                     else:
                         raise ValueError('Error param type {}'.format(terminal_stack[-1][0]))
                     program.append(_choice)
@@ -258,14 +265,11 @@ class _Program(object):
                 output += node.name + '('
             else:
                 if isinstance(node, str):
-                    if self.feature_names is None:
-                        output += 'X%s' % node
-                    else:
-                        output += self.feature_names[int(node)]
+                    output += self._feature_label(node)
                 # elif isinstance(node, int):
                 elif isinstance(node, (int, np.integer)):
                     output += '%d' % node
-                elif isinstance(node, float):
+                elif isinstance(node, (float, np.floating)):
                     output += '%.3f' % node
                 else:
                     print(type(node))
@@ -312,16 +316,13 @@ class _Program(object):
                     fill = '#60a6f6'
 
                 if isinstance(node, str):
-                    if self.feature_names is None:
-                        feature_name = 'X%s' % node
-                    else:
-                        feature_name = self.feature_names[int(node)]
+                    feature_name = self._feature_label(node)
                     output += ('%d [label="%s", fillcolor="%s"] ;\n'
                                % (i, feature_name, fill))
-                elif isinstance(node, int):
+                elif isinstance(node, (int, np.integer)):
                     output += ('%d [label="%d", fillcolor="%s"] ;\n'
                                % (i, node, fill))
-                elif isinstance(node, int):
+                elif isinstance(node, (float, np.floating)):
                     output += ('%d [label="%.3f", fillcolor="%s"] ;\n'
                                % (i, node, fill))
                 else:
@@ -411,7 +412,7 @@ class _Program(object):
             while len(apply_stack[-1]) == apply_stack[-1][0].arity + 1:
                 # Apply functions that have sufficient arguments
                 function = apply_stack[-1][0]
-                terminals = [np.repeat(t, X.shape[0]) if isinstance(t, (float, int))
+                terminals = [np.repeat(t, X.shape[0]) if isinstance(t, (float, int, np.integer, np.floating))
                              else (X[:, int(t)] if isinstance(t, str)
                                    else t) for t in apply_stack[-1][1:]]
                 # 对于时序和截面函数加入管道

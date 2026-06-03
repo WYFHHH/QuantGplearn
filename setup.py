@@ -12,6 +12,22 @@ setup(
     long_description_content_type='text/markdown',
     url='https://github.com/WYFHHH/QuantGplearn',
     packages=find_packages(),
+    install_requires=[
+        'numpy',
+        'pandas',
+        'scipy',
+        'scikit-learn',
+        'joblib',
+        'pathos',
+        'numba',
+        'requests',
+        'tqdm',
+        'dill',
+        'matplotlib',
+        'seaborn',
+        'pyyaml',
+        'tables',
+    ],
     classifiers=[
         'Programming Language :: Python :: 3',
         'License :: OSI Approved :: MIT License',
@@ -20,5 +36,4 @@ setup(
     python_requires='>=3.11',
     platforms='Linux'
 )
-
 
