@@ -210,6 +210,26 @@ tests/
 - Fee: `3 / 10000` per unit turnover.
 - Benchmark: equal-weight forward return across the panel universe.
 
+## Sample Validation
+
+On the local 10-symbol Binance USD-M panel
+`2025-06-03 04:00:00 -> 2026-06-03 03:00:00`, the cross-section backtester
+was smoke-tested on a simple price-rank factor after feature warm-up:
+
+```text
+factor: open / high / low / close / vwap rank
+net total return: 22.17%
+annual return:    22.66%
+sharpe:            1.21
+max drawdown:    -14.87%
+calmar:            1.52
+```
+
+This is a reproducibility check for the data, portfolio, fee, and plotting
+pipeline rather than a production trading claim. The legacy single-symbol
+time-series artifact is kept as an API compatibility example; it is not
+presented as a performance highlight.
+
 ## FAQ
 
 **Does the downloader require a Binance API key?**

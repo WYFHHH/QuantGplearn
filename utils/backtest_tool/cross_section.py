@@ -28,20 +28,19 @@ def build_market_neutral_weights(
     short_total=-0.5,
 ):
     factor_wide = _to_wide_series(factor)
+    valid_count = factor_wide.notna().sum(axis=1)
+    leg_size = np.floor(valid_count * quantile).astype(int).clip(lower=1)
+    leg_size = pd.concat([leg_size, (valid_count // 2).astype(int)], axis=1).min(axis=1)
+    tradable = leg_size >= 1
+
+    rank_asc = factor_wide.rank(axis=1, method="first", ascending=True)
+    rank_desc = factor_wide.rank(axis=1, method="first", ascending=False)
+    long_mask = rank_desc.le(leg_size, axis=0) & tradable.to_numpy()[:, None]
+    short_mask = rank_asc.le(leg_size, axis=0) & tradable.to_numpy()[:, None]
+
     weights = pd.DataFrame(0.0, index=factor_wide.index, columns=factor_wide.columns)
-    for dt_index, row in factor_wide.iterrows():
-        valid = row.dropna()
-        if len(valid) < 2:
-            continue
-        leg_size = max(1, int(np.floor(len(valid) * quantile)))
-        leg_size = min(leg_size, len(valid) // 2)
-        if leg_size < 1:
-            continue
-        ranked = valid.sort_values()
-        shorts = ranked.index[:leg_size]
-        longs = ranked.index[-leg_size:]
-        weights.loc[dt_index, longs] = long_total / leg_size
-        weights.loc[dt_index, shorts] = short_total / leg_size
+    weights = weights.mask(long_mask, long_total).mask(short_mask, short_total)
+    weights = weights.div(leg_size.replace(0, np.nan), axis=0).fillna(0.0)
     return weights
 
 
