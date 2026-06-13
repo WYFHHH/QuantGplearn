@@ -27,6 +27,8 @@ setup(
         'seaborn',
         'pyyaml',
         'tables',
+        'torch',
+        'pyarrow',
     ],
     classifiers=[
         'Programming Language :: Python :: 3',

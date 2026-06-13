@@ -180,3 +180,44 @@ data/cache/
 data/binance_um_perp_1h_panel.h*
 backtest_results/cross_section/
 example/details/cross_section/
+
+# Local IDE settings
+/.idea/
+/.vscode/
+
+# Private research code and launch scripts
+/strategy/
+/scripts/
+/run_*.py
+/replicate_all_strategies/
+/VERSION_GP_SEARCH.txt
+
+# Private data, configuration, logs, and generated outputs
+/data/
+/config/
+/logs/
+/backtest_results/
+/results/
+**/results/
+*.parquet
+*.h5
+*.hdf5
+
+# Private training/mining examples and their support utilities
+/example/
+/utils/
+
+# Private strategy documentation
+/docs/BTCUSDT_LONG_ONLY_PRODUCT.md
+/docs/GP_TIME_SERIES_FACTOR_SEARCH.md
+/docs/LONG_ONLY_GP_EXPORT_AND_RULE_SELECTION.md
+/docs/LONG_ONLY_GP_GRID_AND_FRACTIONAL_POSITION.md
+/docs/TIME_SERIES_BACKTEST.md
+
+# Tests coupled to private strategy and data pipelines
+/tests/fixtures/
+/tests/test_binance_downloader.py
+/tests/test_cross_section_backtest.py
+/tests/test_crypto_binance_demo.py
+/tests/test_gp_quantile_search.py
+/tests/test_long_only_product.py

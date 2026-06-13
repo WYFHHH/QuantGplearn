@@ -1,0 +1,17 @@
+numpy
+pandas
+scipy
+scikit-learn
+joblib
+pathos
+numba
+requests
+tqdm
+dill
+matplotlib
+seaborn
+pyyaml
+tables
+torch
+pytest
+pyarrow
