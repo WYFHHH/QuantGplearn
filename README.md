@@ -5,34 +5,27 @@
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![GP](https://img.shields.io/badge/genetic%20programming-factor%20mining-purple)](QuantGplearn/genetic.py)
 
-QuantGplearn is a genetic-programming research framework for crypto futures
-factor mining. It extends the `gplearn` programming style with finance-oriented
-time-series operators, cross-section operators, panel-data execution, and
-market-neutral backtesting.
+QuantGplearn is a genetic-programming framework for quantitative factor
+research. It provides a legacy NumPy/Pandas execution path and a Torch backend
+for GPU-accelerated panel factor evaluation.
 
 ```mermaid
 flowchart LR
-    A[Binance USD-M Futures API] --> B[1h OHLCV Panel Cache]
-    B --> C[Feature Builder]
-    C --> D[Time-Series + Cross-Section GP]
-    D --> E[Factor Candidates]
-    E --> F[Market-Neutral Backtest]
-    F --> G[Equity, Drawdown, Sharpe, Heatmap]
+    A[Panel Features] --> B[GP Expression Trees]
+    B --> C[NumPy/Pandas or Torch Execution]
+    C --> D[IC, RankIC, ICIR, or Sharpe Objective]
+    D --> E[Factor Selection and Correlation Filtering]
 ```
 
 ## Highlights
 
 - `gplearn`-style estimators: `SymbolicRegressor`, `SymbolicClassifier`, and
   `SymbolicTransformer`.
-- Time-series operators for rolling momentum, ranks, correlations, z-scores,
-  ATR, MACD, hedge residuals, and more.
-- Cross-section operators for panel strategies: `cs_rank`, `cs_zscore`,
-  `cs_demean`, `cs_scale`, and `cs_winsorize`.
-- Panel execution that can combine time-series operators by symbol with
-  cross-section operators by timestamp.
-- Binance USD-M perpetual downloader for 10 default high-liquidity contracts.
-- Market-neutral cross-section backtester with fees, turnover, drawdowns,
-  rolling Sharpe, equal-weight benchmark, and monthly return heatmaps.
+- `GpuSymbolicTransformer` for Torch-based panel factor mining.
+- Finance-oriented rolling time-series and cross-section operators.
+- Dense panel representation with shape `[time, security, feature]`.
+- GPU objectives including IC, RankIC, ICIR, RankICIR, and long-short Sharpe.
+- Expression caching, daily normalization, and factor-correlation filtering.
 
 ## Installation
 
@@ -44,93 +37,95 @@ cd QuantGplearn
 python -m pip install -e .
 ```
 
-Runtime dependencies are declared in `setup.py` and include:
+Runtime dependencies are declared in `setup.py`. GPU execution requires a
+Torch build compatible with the installed CUDA runtime.
 
-```text
-numpy, pandas, scipy, scikit-learn, joblib, pathos, numba, requests,
-tqdm, dill, matplotlib, seaborn, pyyaml, tables
-```
-
-For tests:
+For development tests:
 
 ```bash
 python -m pip install pytest
-pytest
+pytest -q
 ```
 
-## Quick Start: Cross-Section GP
+## CPU API
 
-Download the default 10-symbol Binance USD-M perpetual panel:
+The original symbolic estimators remain available:
 
-```bash
-python example/download_binance_panel.py
+```python
+from QuantGplearn.genetic import SymbolicTransformer
+
+model = SymbolicTransformer(
+    population_size=1000,
+    generations=20,
+    hall_of_fame=100,
+    n_components=20,
+    function_set=["add", "sub", "mul", "div", "ts_delta", "ts_mean"],
+    random_state=2025,
+)
 ```
 
-Default universe:
+The CPU path supports raw, time-series, cross-section, and mixed panel
+expressions.
+
+## GPU/Torch Panel API
+
+Input data should be a `pandas.DataFrame` indexed by `datetime` and `symbol`,
+with feature columns and a target column:
+
+```python
+from QuantGplearn.gpu_transformer import GpuSymbolicTransformer
+from QuantGplearn.torch_functions import GPU_SAFE_PANEL_FUNCTIONS
+
+feature_names = ["open", "high", "low", "close", "volume"]
+
+model = GpuSymbolicTransformer(
+    population_size=512,
+    generations=20,
+    hall_of_fame=100,
+    n_components=20,
+    tournament_size=64,
+    function_set=GPU_SAFE_PANEL_FUNCTIONS,
+    objective="icir",
+    feature_names=feature_names,
+    time_series_index="datetime",
+    security_index="symbol",
+    device="cuda:0",
+    random_state=2025,
+    verbose=1,
+)
+
+model.fit_panel(panel_df, target_col="target")
+factor_df = model.transform_panel(output="dataframe")
+expression_df = model.get_factor_expressions()
+```
+
+Internally the panel is converted to:
 
 ```text
-BTCUSDT, ETHUSDT, BNBUSDT, SOLUSDT, XRPUSDT,
-DOGEUSDT, ADAUSDT, AVAXUSDT, LINKUSDT, LTCUSDT
+values: [T, N, F]
+target: [T, N]
+mask:   [T, N]
 ```
 
-Then mine and backtest cross-section GP factors:
-
-```bash
-python example/cross_section_gp.py
-```
-
-Generated local artifacts are written under `backtest_results/cross_section/`
-and are ignored by Git.
-
-For a quick smoke test on an existing panel cache:
-
-```bash
-python example/cross_section_gp.py \
-  --data data/binance_um_perp_1h_panel.h \
-  --population-size 4 \
-  --generations 1 \
-  --components 1 \
-  --max-length 8 \
-  --output-dir backtest_results/cross_section/smoke_gp
-```
-
-If Binance returns HTTP 451 in your region, run from an eligible network or set
-standard proxy environment variables before downloading:
-
-```bash
-export HTTP_PROXY=http://127.0.0.1:7890
-export HTTPS_PROXY=http://127.0.0.1:7890
-python example/download_binance_panel.py
-```
-
-## Quick Start: Single-Symbol Time-Series GP
-
-The original BTCUSDT time-series example remains available:
-
-```bash
-python example/get_factors.py
-```
-
-It loads BTCUSDT hourly data from `data/`, trains a small symbolic transformer,
-saves selected programs under `example/details/factors/`, and writes example
-performance artifacts under `backtest_results/`.
+When CUDA is unavailable, the GPU transformer can run on CPU tensors for
+functional validation.
 
 ## Function Sets
 
 Core primitives:
 
 ```text
-add, sub, mul, div, sqrt, log, abs, neg, inv, max, min, sig
+add, sub, mul, div, sqrt, log, abs, neg, inv, max, min, sin, cos, tan, sig
 ```
 
-Time-series operators:
+Time-series operators include:
 
 ```text
 ts_shift, ts_delta, ts_mom, ts_min, ts_max, ts_argmax, ts_argmin,
-ts_rank, ts_sum, ts_std, ts_corr, ts_mean, ts_zscore, ts_cdlbodym,
-ts_bar_bs, ts_adx, ts_aroon, ts_bopr, ts_cmo, ts_macd, ts_rsi,
-ts_stochf, ts_xs_ratio, ts_one_ols_k, ts_one_ols_resid, ts_skew,
-ts_kurt, ts_atr, ts_hedge
+ts_rank, ts_sum, ts_std, ts_corr, ts_mean, ts_zscore, ts_freq,
+ts_cdlbodym, ts_bar_bs, ts_adx, ts_aroon, ts_bopr, ts_cmo, ts_ema,
+ts_macd, ts_rsi, ts_stochf, ts_xs_ratio, ts_one_ols_k,
+ts_one_ols_resid, ts_skew, ts_kurt, ts_atr, ts_hedge, ts_bband
 ```
 
 Cross-section operators:
@@ -139,123 +134,45 @@ Cross-section operators:
 cs_rank, cs_zscore, cs_demean, cs_scale, cs_winsorize
 ```
 
-Use:
+Use `functions.all_function` for legacy raw and time-series workflows,
+`functions.section_function` for cross-section expressions, and
+`functions.panel_function` for expressions that mix both dimensions.
 
-- `functions.all_function` for legacy raw + time-series workflows.
-- `functions.section_function` for cross-section-only expressions.
-- `functions.panel_function` for panel GP that can mix time-series and
-  cross-section logic.
+## Public Repository Scope
 
-The default integer windows are configured for hourly bars:
-
-```text
-24, 72, 168, 336, 504, 720
-```
-
-## Data Format
-
-The Binance downloader stores a local HDF5 panel cache:
-
-```text
-data/binance_um_perp_1h_panel.h
-```
-
-The table uses a MultiIndex:
-
-```text
-datetime, symbol
-```
-
-And includes:
-
-```text
-open, high, low, close, volume, quote_volume, trade_count,
-taker_buy_volume, taker_buy_quote_volume, vwap, close_datetime
-```
-
-Full market data is not committed to Git. Rebuild it with:
-
-```bash
-python example/download_binance_panel.py --days 365
-```
-
-## Project Layout
+This public repository contains the reusable framework:
 
 ```text
 QuantGplearn/
-  functions.py       Protected primitives, time-series ops, cross-section ops
-  genetic.py         Symbolic estimators and panel execution
-  _program.py        Symbolic program representation
-example/
-  get_factors.py             Legacy BTCUSDT time-series example
-  download_binance_panel.py  Binance futures panel downloader
-  cross_section_gp.py        Market-neutral cross-section GP example
-utils/
-  data/binance_futures.py            Official Binance REST downloader
-  backtest_tool/cross_section.py     Cross-section backtest and plots
-  backtest_tool/generate_performance.py
+  genetic.py
+  _program.py
+  functions.py
+  gpu_transformer.py
+  tensor_data.py
+  torch_functions.py
+  tensor_fitness.py
+  evaluator.py
+  alpha_pool.py
+docs/
 tests/
-  test_functions.py
-  test_panel_program.py
-  test_cross_section_backtest.py
-  test_binance_downloader.py
 ```
 
-## Backtest Defaults
+Private research data, strategy implementations, training launchers, mined
+expressions, logs, and backtest outputs are intentionally excluded from the
+public repository.
 
-- Signal timing: factor at time `t` enters at the next open.
-- Return timing: open-to-open forward return after entry.
-- Portfolio: market neutral, long top 30%, short bottom 30%.
-- Gross exposure: long `+0.5`, short `-0.5`.
-- Fee: `3 / 10000` per unit turnover.
-- Benchmark: equal-weight forward return across the panel universe.
+## Documentation
 
-## Sample Validation
-
-On the local 10-symbol Binance USD-M panel
-`2025-06-03 04:00:00 -> 2026-06-03 03:00:00`, the cross-section backtester
-was smoke-tested on a simple price-rank factor after feature warm-up:
-
-```text
-factor: open / high / low / close / vwap rank
-net total return: 22.17%
-annual return:    22.66%
-sharpe:            1.21
-max drawdown:    -14.87%
-calmar:            1.52
-```
-
-This is a reproducibility check for the data, portfolio, fee, and plotting
-pipeline rather than a production trading claim. The legacy single-symbol
-time-series artifact is kept as an API compatibility example; it is not
-presented as a performance highlight.
-
-## FAQ
-
-**Does the downloader require a Binance API key?**
-No. It uses public USD-M futures market data endpoints.
-
-**Why does Binance return HTTP 451?**
-Binance blocks futures APIs from some regions. QuantGplearn does not bypass
-that policy; run the downloader from an eligible network or configure
-`HTTP_PROXY` and `HTTPS_PROXY`.
-
-**Are downloaded data files committed?**
-No. `data/cache/` and generated cross-section artifacts are ignored.
-
-**Can time-series and cross-section operators appear in one formula?**
-Yes. With `data_type="panel"` and `functions.panel_function`, time-series
-operators are applied per symbol and cross-section operators are applied per
-timestamp.
+- `docs/GPU_FACTOR_MINING.md`: GPU architecture and usage.
+- `docs/OPTIMIZED_OPERATORS.md`: optimized CPU and Torch operators.
+- `docs/REFACTOR_SUMMARY.md`: CPU/GPU compatibility and refactor overview.
 
 ## Acknowledgements
 
 QuantGplearn is inspired by and adapted from:
 
-- [`gplearn`](https://github.com/trevorstephens/gplearn), the foundational
-  symbolic genetic programming project.
-- [`gplearnplus`](https://github.com/ACEACEjasonhuang/gplearnplus), a reference
-  for extended GP functionality.
+- [`gplearn`](https://github.com/trevorstephens/gplearn)
+- [`gplearnplus`](https://github.com/ACEACEjasonhuang/gplearnplus)
 
 ## License
 

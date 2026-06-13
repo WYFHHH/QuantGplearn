@@ -3,6 +3,11 @@ import warnings
 
 import numpy as np
 import pandas as pd
+
+try:
+    import numba as nb
+except Exception:  # pragma: no cover - numba is optional at import time
+    nb = None
 from joblib import wrap_non_picklable_objects
 
 warnings.filterwarnings("ignore")
@@ -22,11 +27,16 @@ para_list = [24, 24 * 3, 24 * 7, 24 * 14, 24 * 21, 24 * 30]
 
 
 class _Function(object):
-    """Function metadata used by the genetic-programming tree builder."""
+    """Function metadata used by the genetic-programming tree builder.
+
+    ``torch_function`` is optional and is only used by the new GPU execution
+    path. The legacy NumPy/Pandas path remains unchanged.
+    """
 
     def __init__(self, function, name, arity, param_type=None,
-                 return_type="number", function_type="all"):
+                 return_type="number", function_type="all", torch_function=None):
         self.function = function
+        self.torch_function = torch_function
         self.name = name
         self.arity = arity
         if param_type is None:
@@ -59,6 +69,17 @@ class _Function(object):
             else:
                 converted.append(param)
         return self.function(*converted)
+
+    def call_torch(self, *args):
+        if self.torch_function is None:
+            raise NotImplementedError(f"Function {self.name!r} has no torch backend")
+        converted = []
+        for param, param_type in zip(args, self.param_type):
+            if set(param_type.keys()) == {"scalar"} and hasattr(param, "numel"):
+                converted.append(param.flatten()[0] if param.numel() else param)
+            else:
+                converted.append(param)
+        return self.torch_function(*converted)
 
     def add_range(self, const_range):
         """Apply global scalar ranges while preserving explicit value lists."""
@@ -143,6 +164,138 @@ def _safe_scale(values):
     if not np.isfinite(denom) or denom < EPS:
         return np.zeros_like(values, dtype=float)
     return values / denom
+
+
+if nb is not None:
+    @nb.njit(cache=True)
+    def _rolling_argmax_fast(arr, window):
+        n = arr.shape[0]
+        out = np.empty(n, dtype=np.float64)
+        for i in range(n):
+            out[i] = np.nan
+        for i in range(window - 1, n):
+            best = 0.0
+            best_idx = -1
+            found = False
+            start = i - window + 1
+            for j in range(window):
+                v = arr[start + j]
+                if np.isfinite(v):
+                    if (not found) or v > best:
+                        best = v
+                        best_idx = j
+                        found = True
+            if found:
+                out[i] = float(best_idx)
+        return out
+
+    @nb.njit(cache=True)
+    def _rolling_argmin_fast(arr, window):
+        n = arr.shape[0]
+        out = np.empty(n, dtype=np.float64)
+        for i in range(n):
+            out[i] = np.nan
+        for i in range(window - 1, n):
+            best = 0.0
+            best_idx = -1
+            found = False
+            start = i - window + 1
+            for j in range(window):
+                v = arr[start + j]
+                if np.isfinite(v):
+                    if (not found) or v < best:
+                        best = v
+                        best_idx = j
+                        found = True
+            if found:
+                out[i] = float(best_idx)
+        return out
+
+    @nb.njit(cache=True)
+    def _rolling_rank_last_fast(arr, window):
+        n = arr.shape[0]
+        out = np.empty(n, dtype=np.float64)
+        for i in range(n):
+            out[i] = np.nan
+        for i in range(window - 1, n):
+            last = arr[i]
+            if not np.isfinite(last):
+                continue
+            start = i - window + 1
+            less = 0
+            equal = 0
+            count = 0
+            for j in range(window):
+                v = arr[start + j]
+                if np.isfinite(v):
+                    count += 1
+                    if v < last:
+                        less += 1
+                    elif v == last:
+                        equal += 1
+            if count > 0:
+                rank_avg = less + (equal + 1.0) / 2.0
+                out[i] = rank_avg / count
+        return out
+
+    @nb.njit(cache=True)
+    def _rolling_freq_fast(arr, window):
+        n = arr.shape[0]
+        out = np.empty(n, dtype=np.float64)
+        for i in range(n):
+            out[i] = np.nan
+        for i in range(window - 1, n):
+            last = arr[i]
+            if not np.isfinite(last):
+                continue
+            start = i - window + 1
+            cnt = 0
+            for j in range(window):
+                if arr[start + j] == last:
+                    cnt += 1
+            out[i] = float(cnt)
+        return out
+else:
+    def _rolling_argmax_fast(arr, window):
+        arr = np.asarray(arr, dtype=float)
+        out = np.full(arr.shape[0], np.nan, dtype=float)
+        for i in range(window - 1, arr.shape[0]):
+            win = arr[i - window + 1:i + 1]
+            if np.isfinite(win).any():
+                out[i] = float(np.nanargmax(win))
+        return out
+
+    def _rolling_argmin_fast(arr, window):
+        arr = np.asarray(arr, dtype=float)
+        out = np.full(arr.shape[0], np.nan, dtype=float)
+        for i in range(window - 1, arr.shape[0]):
+            win = arr[i - window + 1:i + 1]
+            if np.isfinite(win).any():
+                out[i] = float(np.nanargmin(win))
+        return out
+
+    def _rolling_rank_last_fast(arr, window):
+        arr = np.asarray(arr, dtype=float)
+        out = np.full(arr.shape[0], np.nan, dtype=float)
+        for i in range(window - 1, arr.shape[0]):
+            win = arr[i - window + 1:i + 1]
+            last = win[-1]
+            mask = np.isfinite(win)
+            if np.isfinite(last) and mask.any():
+                less = np.sum(win[mask] < last)
+                equal = np.sum(win[mask] == last)
+                out[i] = (less + (equal + 1.0) / 2.0) / mask.sum()
+        return out
+
+    def _rolling_freq_fast(arr, window):
+        arr = np.asarray(arr, dtype=float)
+        out = np.full(arr.shape[0], np.nan, dtype=float)
+        for i in range(window - 1, arr.shape[0]):
+            win = arr[i - window + 1:i + 1]
+            last = win[-1]
+            if np.isfinite(last):
+                out[i] = float(np.sum(win == last))
+        return out
 
 
 def _groupby(gbx, func, *args, **kwargs):
@@ -335,23 +488,22 @@ def _ts_max(x, d):
 def _ts_argmax(x, d):
     x = _as_float_array(x)
     d = _as_int_window(d, len(x))
-    return _safe_series(x).rolling(d).apply(lambda values: float(np.nanargmax(values)), raw=True).values
+    return _rolling_argmax_fast(x, d)
+
 
 
 def _ts_argmin(x, d):
     x = _as_float_array(x)
     d = _as_int_window(d, len(x))
-    return _safe_series(x).rolling(d).apply(lambda values: float(np.nanargmin(values)), raw=True).values
+    return _rolling_argmin_fast(x, d)
+
 
 
 def _ts_rank(x, d):
     x = _as_float_array(x)
     d = _as_int_window(d, len(x))
+    return _rolling_rank_last_fast(x, d)
 
-    def rank_last(values):
-        return pd.Series(values).rank(method="average", pct=True).iloc[-1]
-
-    return _safe_series(x).rolling(d).apply(rank_last, raw=False).values
 
 
 def _ts_sum(x, d):
@@ -434,33 +586,35 @@ def _ts_bopr(open_, high, low, close, d):
 
 
 def _ts_one_ols_k(x, y, d):
+    """Rolling OLS slope of y on x using rolling sums.
+
+    This replaces the previous per-window polyfit loop with the closed-form
+    beta = cov(x, y) / var(x). Windows with a near-zero denominator return 0.
+    """
     x = _as_float_array(x)
     y = _as_float_array(y)
     d = _as_int_window(d, len(x))
+    sx = _ts_sum(x, d)
+    sy = _ts_sum(y, d)
+    sxy = _ts_sum(x * y, d)
+    sx2 = _ts_sum(x * x, d)
+    numerator = d * sxy - sx * sy
+    denominator = d * sx2 - sx * sx
+    beta = np.divide(numerator, denominator, out=np.zeros_like(numerator), where=np.abs(denominator) > EPS)
+    return np.where(np.isfinite(beta), beta, 0.0)
 
-    def slope(values):
-        lhs = values[:d]
-        rhs = values[d:]
-        if np.nanstd(lhs) < EPS:
-            return 0.0
-        return float(np.polyfit(lhs, rhs, 1)[0])
-
-    stacked = pd.concat([pd.Series(x), pd.Series(y)], axis=1)
-    return stacked.rolling(d).apply(lambda col: col.iloc[-1], raw=False).iloc[:, 0].combine(
-        stacked.rolling(d).apply(lambda col: col.iloc[-1], raw=False).iloc[:, 1],
-        lambda _a, _b: np.nan,
-    ).values if False else pd.Series(np.r_[np.full(d - 1, np.nan), [
-        slope(np.r_[x[i - d + 1:i + 1], y[i - d + 1:i + 1]]) for i in range(d - 1, len(x))
-    ]]).values
 
 
 def _ts_one_ols_resid(x, y, d):
+    """Current-point residual from a rolling one-factor OLS of y on x."""
     x = _as_float_array(x)
     y = _as_float_array(y)
-    k = _ts_one_ols_k(x, y, d)
     d = _as_int_window(d, len(x))
-    intercept = _ts_mean(y, d) - k * _ts_mean(x, d)
-    return y - (k * x + intercept)
+    beta = _ts_one_ols_k(x, y, d)
+    intercept = _ts_mean(y, d) - beta * _ts_mean(x, d)
+    resid = y - (beta * x + intercept)
+    return np.where(np.isfinite(resid), resid, np.nan)
+
 
 
 def _ts_stochf(high, low, close, d):
@@ -490,27 +644,44 @@ def _ts_rsi(x, d):
 
 
 def _ts_xs_ratio(x, d):
-    return _protected_division(_as_float_array(x), _ts_mean(x, d))
+    """Efficiency-ratio style trend strength: abs(x_t - x_{t-d}) / sum(abs(delta_1), d)."""
+    x = _as_float_array(x)
+    d = _as_int_window(d, len(x))
+    directional = np.abs(x - _ts_shift(x, d))
+    volatility = _ts_sum(np.abs(x - _ts_shift(x, 1)), d)
+    return _protected_division(directional, volatility)
+
 
 
 def _ts_macd(x, d1, d2, d3):
+    """Rolling-MA MACD variant from the optimized operator set."""
     d1 = _as_int_window(d1, len(x))
     d2 = _as_int_window(d2, len(x))
     d3 = _as_int_window(d3, len(x))
-    fast, slow = sorted([d1, d2])
-    dif = _safe_series(x).ewm(span=fast, adjust=False, min_periods=fast).mean() - \
-        _safe_series(x).ewm(span=slow, adjust=False, min_periods=slow).mean()
-    dea = dif.ewm(span=d3, adjust=False, min_periods=d3).mean()
-    return (dif - dea).values
+    short_ma = _ts_mean(x, d1)
+    long_ma = _ts_mean(x, d2)
+    cd = short_ma - long_ma
+    return _ts_mean(cd, d3)
+
 
 
 def _ts_atr(high, low, close, d1, d2):
+    """Range expansion ratio from the optimized operator set."""
     high = _as_float_array(high)
     low = _as_float_array(low)
     close = _as_float_array(close)
-    prev_close = _ts_shift(close, 1)
-    tr = np.nanmax(np.vstack([high - low, np.abs(high - prev_close), np.abs(low - prev_close)]), axis=0)
-    return _ts_mean(_ts_mean(tr, d1), d2)
+    d1 = _as_int_window(d1, len(high))
+    d2 = _as_int_window(d2, len(high))
+    high_max = _ts_max(high, d1)
+    low_min = _ts_min(low, d1)
+    prev_close = _ts_shift(close, d1)
+    tr = np.nanmax(np.vstack([
+        np.abs(high_max - prev_close),
+        np.abs(low_min - prev_close),
+        high_max - low_min,
+    ]), axis=0)
+    return _protected_division(_ts_mean(tr, d2), close)
+
 
 
 def _ts_hedge(x, y, d1, d2):
@@ -526,11 +697,8 @@ def _ts_bband(x, d1, d2):
 def _ts_freq(x, d):
     x = _as_float_array(x)
     d = _as_int_window(d, len(x))
+    return _rolling_freq_fast(x, d)
 
-    def freq(values):
-        return float(np.sum(values == values[-1]))
-
-    return _safe_series(x).rolling(d).apply(freq, raw=True).values
 
 
 def _cs_rank(x):
@@ -769,12 +937,14 @@ time_series_function = [
     "ts_corr",
     "ts_mean",
     "ts_zscore",
+    "ts_freq",
     "ts_cdlbodym",
     "ts_bar_bs",
     "ts_adx",
     "ts_aroon",
     "ts_bopr",
     "ts_cmo",
+    "ts_ema",
     "ts_macd",
     "ts_rsi",
     "ts_stochf",
@@ -785,6 +955,7 @@ time_series_function = [
     "ts_kurt",
     "ts_atr",
     "ts_hedge",
+    "ts_bband",
 ]
 
 panel_function = raw_function_list + time_series_function + section_function

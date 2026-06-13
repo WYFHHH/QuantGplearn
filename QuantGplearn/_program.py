@@ -101,9 +101,9 @@ class _Program(object):
             else:
                 if isinstance(node, str):
                     my_output += self._feature_label(node)
-                elif isinstance(node, int):
+                elif isinstance(node, (int, np.integer)):
                     my_output += '%d' % node
-                elif isinstance(node, float):
+                elif isinstance(node, (float, np.floating)):
                     my_output += '%.3f' % node
                 else:
                     raise ValueError('Error param type {}'.format(node))
@@ -431,6 +431,81 @@ class _Program(object):
                     return intermediate_result
 
         # We should never get here
+        return None
+
+    def execute_tensor(self, data):
+        """Execute the program on a :class:`TensorPanelData` object.
+
+        The tensor backend evaluates all primitives on dense tensors with shape
+        ``[T, N]``. Cross-sectional functions operate along the symbol dimension
+        inside their torch implementation; time-series functions operate along
+        the time dimension. This avoids the legacy Pandas/groupby loop used by
+        ``execute`` for panel data.
+        """
+        try:
+            import torch
+        except Exception as exc:  # pragma: no cover
+            raise ImportError("execute_tensor requires PyTorch") from exc
+
+        if not hasattr(data, "values"):
+            raise TypeError("data must be a TensorPanelData-like object with a values tensor")
+        X = data.values
+        if X.ndim != 3:
+            raise ValueError("data.values must have shape [T, N, F]")
+        if X.shape[2] != self.n_features:
+            raise ValueError(
+                "Program n_features does not match tensor data: "
+                f"{self.n_features} != {X.shape[2]}"
+            )
+
+        def terminal_value(node):
+            if isinstance(node, str):
+                # GP terminals are 1-based feature ids in QuantGplearn.
+                idx = int(node) - 1
+                if idx < 0 or idx >= X.shape[2]:
+                    raise IndexError(f"feature terminal {node!r} is out of range")
+                return X[:, :, idx]
+            if isinstance(node, (int, float, np.integer, np.floating)):
+                return torch.as_tensor(float(node), dtype=X.dtype, device=X.device)
+            if isinstance(node, torch.Tensor):
+                return node.to(device=X.device, dtype=X.dtype)
+            return node
+
+        node = self.program[0]
+        if isinstance(node, (float, int, np.integer, np.floating)):
+            return torch.full((X.shape[0], X.shape[1]), float(node), dtype=X.dtype, device=X.device)
+        if isinstance(node, str):
+            return terminal_value(node)
+
+        apply_stack = []
+        for node in self.program:
+            if isinstance(node, _Function):
+                apply_stack.append([node])
+            else:
+                apply_stack[-1].append(node)
+
+            while len(apply_stack[-1]) == apply_stack[-1][0].arity + 1:
+                function = apply_stack[-1][0]
+                terminals = [terminal_value(t) for t in apply_stack[-1][1:]]
+                intermediate_result = function.call_torch(*terminals)
+                if not isinstance(intermediate_result, torch.Tensor):
+                    intermediate_result = torch.as_tensor(intermediate_result, dtype=X.dtype, device=X.device)
+                if intermediate_result.ndim == 0:
+                    intermediate_result = intermediate_result.expand(X.shape[0], X.shape[1])
+                if intermediate_result.shape != (X.shape[0], X.shape[1]):
+                    try:
+                        intermediate_result = intermediate_result.expand(X.shape[0], X.shape[1])
+                    except RuntimeError as exc:
+                        raise ValueError(
+                            f"torch backend of {function.name!r} returned shape "
+                            f"{tuple(intermediate_result.shape)}, expected {(X.shape[0], X.shape[1])}"
+                        ) from exc
+                if len(apply_stack) != 1:
+                    apply_stack.pop()
+                    apply_stack[-1].append(intermediate_result)
+                else:
+                    return intermediate_result
+
         return None
 
     # 选择部分样本
